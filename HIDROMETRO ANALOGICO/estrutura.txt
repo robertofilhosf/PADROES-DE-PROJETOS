@@ -1,0 +1,10 @@
+hidrometro_simulator/
+├── main.cpp
+├── Hidrometro.h
+├── Hidrometro.cpp
+├── LeitorArquivo.h
+├── LeitorArquivo.cpp
+├── GeradorImagem.h
+├── GeradorImagem.cpp
+├── dados_consumo.txt
+└── Makefile
