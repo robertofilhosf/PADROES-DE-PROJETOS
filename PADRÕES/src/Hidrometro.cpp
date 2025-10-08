@@ -89,7 +89,7 @@ void Hidrometro::drawHidrometroPrincipal(HDC hdc, double volume) {
 
     // Desenhar dígitos
     for (int i = 0; i < 6; i++) {
-        wchar_t digito[2] = { L'0' + (wchar_t)digitos[i], L'\0' };
+        wchar_t digito[2] = { static_cast<wchar_t>(L'0' + digitos[i], L'\0') };
         RECT rect = {m_x - 250 + i * 100, m_y - 50, m_x - 230 + i * 100, m_y + 30};
         DrawText(hdc, digito, 1, &rect, DT_CENTER | DT_VCENTER);
     }

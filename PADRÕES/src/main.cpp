@@ -13,6 +13,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         Window window;
 
         if (window.create()) {
+            std::cout << "Janela criada. Iniciando simuladores em background..." << std::endl;
+            window.iniciarSimuladores();
+
+            // MessageBoxA(NULL, "Checkpoint 1: A função inciciarSimuladores() foi chamada.", "Depuração", MB_OK);
+
             std::cout << "Sistema iniciado com sucesso!" << std::endl;
             return window.run();
         } else {
@@ -30,6 +35,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         MessageBox(nullptr, L"Exceção desconhecida", L"Erro", MB_ICONERROR);
         return -1;
     }
+    return -1;
 }
 
 // Ponto de entrada alternativo para console

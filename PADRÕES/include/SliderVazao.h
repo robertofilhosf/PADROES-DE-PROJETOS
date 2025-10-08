@@ -10,15 +10,21 @@ private:
     double m_valorMin, m_valorMax, m_valorAtual;
     bool m_arrastando;
 
+    HBRUSH m_railBrush;
+    HBRUSH m_thumbBrush;
+    HFONT m_hFont;
+    HFONT m_smallFont;
+
 public:
     SliderVazao(int x, int y, int width, int height);
+    ~SliderVazao();
 
     void draw(HDC hdc);
     bool handleMouseEvent(UINT message, int mouseX, int mouseY);
     double getValor() const { return m_valorAtual; }
-    void setValor(double valor);
-
+    
 private:
+    void setValor(double valor);
     bool pontoDentroSlider(int x, int y);
     int valorParaPosicao(double valor);
     double posicaoParaValor(int pos);

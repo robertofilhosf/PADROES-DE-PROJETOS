@@ -5,24 +5,47 @@
 #include "SliderVazao.h"
 #include "ResourceManager.h"
 #include <windowsx.h>
+#include <chrono>
+#include <string>
+
+void funcao_worker_hidrometro(Hidrometro* hidrometro, std::mutex* mutex, HWND hwnd) {
+    // MessageBoxA(hwnd, "Checkpoint 3: A thread de trabalho está rodando!", "Depuração", MB_OK);
+    try {
+        // O loop infinito da simulação agora está dentro de um bloco 'try'
+        while (true) {
+            double tempoAtual = GetTickCount() / 1000.0;
+            
+            {
+                std::lock_guard<std::mutex> lock(*mutex);
+                // A causa do travamento provavelmente está nesta chamada -> update()
+                if (hidrometro) {
+                    hidrometro->update(tempoAtual);
+                }
+            }
+
+            PostMessage(hwnd, WM_USER_REDESENHAR, 0, 0);
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        }
+    }
+    catch (const std::exception& e) {
+        // Se um erro padrão do C++ ocorrer (ex: bad_alloc), ele será capturado.
+        std::string error_msg = "Uma exceção ocorreu na thread de simulação:\n\n";
+        error_msg += e.what();
+        MessageBoxA(hwnd, error_msg.c_str(), "Erro Crítico na Simulação", MB_ICONERROR | MB_OK);
+    }
+    catch (...) {
+        // Se ocorrer qualquer outro tipo de erro (ex: acesso a ponteiro nulo).
+        MessageBoxA(hwnd, "Um erro desconhecido e fatal ocorreu na thread de simulação.", "Erro Crítico na Simulação", MB_ICONERROR | MB_OK);
+    }
+}
 
 Window::Window()
-    : m_hwnd(nullptr), m_hInstance(GetModuleHandle(nullptr)),
-      m_hidrometro(nullptr), m_background(nullptr), m_slider(nullptr),
-      m_resourceManager(nullptr) {
-
-    m_tempoInicial = GetTickCount() / 1000.0;
+    : m_hwnd(nullptr), m_hInstance(GetModuleHandle(nullptr)) {
+    // A inicialização do unique_ptr e vetores é feita automaticamente
 }
 
 Window::~Window() {
-    delete m_hidrometro;
-    delete m_background;
-    delete m_slider;
-    delete m_resourceManager;
-
-    if (m_hwnd) {
-        DestroyWindow(m_hwnd);
-    }
     UnregisterClass(Constants::CLASS_NAME(), m_hInstance);
 }
 
@@ -63,43 +86,51 @@ bool Window::create() {
 }
 
 void Window::initializeComponents() {
-    m_resourceManager = new ResourceManager();
+    m_resourceManager = std::make_unique<ResourceManager>();
     m_resourceManager->loadResources();
 
-    m_background = new Background();
+    m_background = std::make_unique<Background>();
 
     // Centralizar hidrômetro principal
     int hidrometroX = Constants::WINDOW_WIDTH / 2;
     int hidrometroY = Constants::WINDOW_HEIGHT / 2 - 100;
-    m_hidrometro = new Hidrometro(hidrometroX, hidrometroY);
+    m_hidrometros.emplace_back(hidrometroX, hidrometroY);
 
     // Slider na parte inferior com vazão controlada
     int sliderWidth = 600;
     int sliderX = (Constants::WINDOW_WIDTH - sliderWidth) / 2;
     int sliderY = Constants::WINDOW_HEIGHT - 120;
-    m_slider = new SliderVazao(sliderX, sliderY, sliderWidth, 30);
+    m_slider = std::make_unique<SliderVazao>(sliderX, sliderY, sliderWidth, 30);
+}
+
+void Window::iniciarSimuladores() {
+    if (!m_hwnd) return;
+
+    // MessageBoxA(m_hwnd, "Checkpoint 2: Prestes a lançar as threads.", "Depuração", MB_OK);
+
+    for (size_t i = 0; i < m_hidrometros.size(); ++i) {
+        m_threadsDeTrabalho.emplace_back(
+            funcao_worker_hidrometro,
+            &m_hidrometros[i],           // Ponteiro para o Hidrômetro
+            &m_mutexDados,              // Ponteiro para o mutex compartilhado
+            m_hwnd                     // Handle da janela para enviar mensagens
+        );
+    }
+
+    for (auto& th : m_threadsDeTrabalho) {
+        th.detach();    // Threads rodam livres em Background
+    }
 }
 
 int Window::run() {
-    if (!m_hwnd && !create()) {
-        return -1;
-    }
 
     ShowWindow(m_hwnd, SW_SHOW);
     UpdateWindow(m_hwnd);
 
     MSG msg = {};
-    while (true) {
-        if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            if (msg.message == WM_QUIT) break;
-
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-        } else {
-            update();
-            InvalidateRect(m_hwnd, nullptr, FALSE);
-            Sleep(50); // ~20 FPS
-        }
+    while (GetMessage(&msg, nullptr, 0, 0) > 0) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
     }
 
     return (int)msg.wParam;
@@ -127,6 +158,10 @@ LRESULT Window::handleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             PostQuitMessage(0);
             return 0;
 
+        case WM_USER_REDESENHAR:
+            InvalidateRect(m_hwnd, nullptr, FALSE);
+            return 0;
+
         case WM_PAINT:
             render();
             return 0;
@@ -136,11 +171,22 @@ LRESULT Window::handleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         case WM_MOUSEMOVE: {
             int mouseX = GET_X_LPARAM(lParam);
             int mouseY = GET_Y_LPARAM(lParam);
+
+            // A chamada ao handleMouseEvent do slider está correta
             if (m_slider && m_slider->handleMouseEvent(uMsg, mouseX, mouseY)) {
-                if (m_hidrometro) {
-                    m_hidrometro->setVazao(m_slider->getValor());
+                
+                // A atualização do hidrômetro (protegida) também está correta
+                {
+                    std::lock_guard<std::mutex> lock(m_mutexDados);
+                    if (!m_hidrometros.empty()) {
+                        m_hidrometros[0].setVazao(m_slider->getValor());
+                    }
                 }
-                InvalidateRect(m_hwnd, nullptr, FALSE);
+
+                // --- CORREÇÃO CRÍTICA ADICIONADA DE VOLTA ---
+                // Precisamos forçar um redesenho IMEDIATAMENTE após a interação do usuário
+                // para que a resposta visual seja instantânea.
+                InvalidateRect(m_hwnd, NULL, FALSE);
             }
             return 0;
         }
@@ -158,79 +204,90 @@ LRESULT Window::handleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     }
 }
 
-void Window::update() {
-    double tempoAtual = GetTickCount() / 1000.0;
-    if (m_hidrometro) {
-        m_hidrometro->update(tempoAtual);
-    }
-}
+// void Window::update() {
+//     double tempoAtual = GetTickCount() / 1000.0;
+//     if (!m_hidrometros.empty()) {
+//         m_hidrometros->update(tempoAtual);
+//     }
+// }
 
 void Window::render() {
     PAINTSTRUCT ps;
     HDC hdc = BeginPaint(m_hwnd, &ps);
 
-    // Double buffering
+    RECT clientRect;
+    GetClientRect(m_hwnd, &clientRect);
+    int width = clientRect.right - clientRect.left;
+    int height = clientRect.bottom - clientRect.top;
+
     HDC memDC = CreateCompatibleDC(hdc);
-    HBITMAP memBitmap = CreateCompatibleBitmap(hdc, Constants::WINDOW_WIDTH, Constants::WINDOW_HEIGHT);
+    HBITMAP memBitmap = CreateCompatibleBitmap(hdc, width, height);
     HGDIOBJ oldBitmap = SelectObject(memDC, memBitmap);
 
-    // Desenhar fundo
-    if (m_background) {
-        m_background->draw(memDC, Constants::WINDOW_WIDTH, Constants::WINDOW_HEIGHT);
+    {
+        std::lock_guard<std::mutex> lock(m_mutexDados);
 
-        // Efeito de água
-        double tempoAtual = GetTickCount() / 1000.0;
-        RECT waterRect = {0, Constants::WINDOW_HEIGHT - 200, Constants::WINDOW_WIDTH, Constants::WINDOW_HEIGHT};
-        m_background->drawWaterEffect(memDC, waterRect, tempoAtual);
-    }
+        if (m_background) {
+            m_background->draw(memDC, width, height);
 
-    // Desenhar título do sistema
-    HFONT titleFont = CreateFont(32, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                                DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS,
-                                CLEARTYPE_QUALITY, VARIABLE_PITCH, L"Arial");
-    HGDIOBJ oldFont = SelectObject(memDC, titleFont);
-    SetTextColor(memDC, RGB(255, 255, 255));
-    SetBkMode(memDC, TRANSPARENT);
+            double tempoAtual = GetTickCount() / 1000.0;
+            RECT waterRect = {0, height - 200, width, height};
+            m_background->drawWaterEffect(memDC, waterRect, tempoAtual);
+        }
 
-    RECT titleRect = {0, 20, Constants::WINDOW_WIDTH, 80};
-    DrawText(memDC, L"SIMULADOR DE HIDRÔMETRO", -1, &titleRect, DT_CENTER);
+        // Título Principal 
+        {
+            HFONT titleFont = CreateFont(32, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                                         DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS,
+                                         CLEARTYPE_QUALITY, VARIABLE_PITCH, L"Arial");
+            
+            HGDIOBJ oldFont = SelectObject(memDC, titleFont); 
+            SetTextColor(memDC, RGB(255, 255, 255));
+            SetBkMode(memDC, TRANSPARENT);
 
-    SelectObject(memDC, oldFont);
-    DeleteObject(titleFont);
+            RECT titleRect = {0, 20, width, 80};
+            DrawText(memDC, L"SIMULADOR DE HIDRÔMETRO", -1, &titleRect, DT_CENTER | DT_VCENTER);
 
-    // Desenhar componentes
-    if (m_hidrometro) {
-        m_hidrometro->draw(memDC);
-    }
+            SelectObject(memDC, oldFont);
+            DeleteObject(titleFont);
+        }
 
-    if (m_slider) {
-        m_slider->draw(memDC);
-    }
+        // Componentes
+        if (!m_hidrometros.empty()) {
+            m_hidrometros[0].draw(memDC);
+        }
 
-    // Desenhar informações adicionais
-    HFONT infoFont = CreateFont(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                               DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS,
-                               CLEARTYPE_QUALITY, VARIABLE_PITCH, L"Arial");
-    SelectObject(memDC, infoFont);
+        if (m_slider) {
+            m_slider->draw(memDC);
+        }
 
-    if (m_hidrometro) {
-        double volumeTotal = m_hidrometro->getVolumeTotal();
-        double vazaoAtual = m_hidrometro->getVazaoAtual() * 1000.0; // Converter para litros/segundo
+        // Informações Adicionais
+        if (!m_hidrometros.empty()) {
+                HFONT infoFont = CreateFont(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                            DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS,
+                                            CLEARTYPE_QUALITY, VARIABLE_PITCH, L"Arial");
 
-        std::wstring infoText = L"Volume Total: " + std::to_wstring(volumeTotal).substr(0, 8) + L" m³ | " +
-                               L"Vazão Atual: " + std::to_wstring(vazaoAtual).substr(0, 6) + L" litros/segundo";
+                HGDIOBJ oldFont = SelectObject(memDC, infoFont);
+                SetTextColor(memDC, RGB(255, 255, 255));
 
-        RECT infoRect = {50, Constants::WINDOW_HEIGHT - 180, Constants::WINDOW_WIDTH - 50, Constants::WINDOW_HEIGHT - 150};
-        DrawText(memDC, infoText.c_str(), -1, &infoRect, DT_CENTER);
-    }
+                double volumeTotal = m_hidrometros[0].getVolumeTotal();
+                double vazaoAtual = m_hidrometros[0].getVazaoAtual() * 1000.0; // L/s
 
-    SelectObject(memDC, oldFont);
-    DeleteObject(infoFont);
+                wchar_t buffer[256];
+                swprintf_s(buffer, L"Volume Total: %.3f m³ | Vazão Atual: %.2f litros/segundo", 
+                           volumeTotal, vazaoAtual);
 
-    // Copiar para tela
-    BitBlt(hdc, 0, 0, Constants::WINDOW_WIDTH, Constants::WINDOW_HEIGHT, memDC, 0, 0, SRCCOPY);
+                RECT infoRect = {0, height - 180, width, height - 150};
+                DrawText(memDC, buffer, -1, &infoRect, DT_CENTER);
 
-    // Limpar recursos
+                SelectObject(memDC, oldFont);
+                DeleteObject(infoFont);
+            }
+        }
+
+    BitBlt(hdc, 0, 0, width, height, memDC, 0, 0, SRCCOPY);
+
+    // Limpeza 
     SelectObject(memDC, oldBitmap);
     DeleteObject(memBitmap);
     DeleteDC(memDC);
