@@ -294,3 +294,12 @@ void Window::render() {
 
     EndPaint(m_hwnd, &ps);
 }
+
+void Window::setVazaoPrincipal(double vazao) {
+    std::lock_guard<std::mutex> lock(m_mutexDados);
+    if (!m_hidrometros.empty()) m_hidrometros[0].setVazao(vazao);
+}
+
+void Window::forcarRedesenho() {
+    InvalidateRect(m_hwnd, NULL, FALSE);
+}
