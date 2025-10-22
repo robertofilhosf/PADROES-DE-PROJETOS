@@ -1,44 +1,23 @@
-#include "Window.h"
-#include <windows.h>
+#include "SimuladorFacade.h"
 #include <iostream>
+#include <windows.h>
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
+int main() {
     AllocConsole();
     FILE* f;
     freopen_s(&f, "CONOUT$", "w", stdout);
 
     std::cout << "Iniciando Sistema Hidrométrico..." << std::endl;
 
-    try {
-        Window window;
+    SimuladorFacade simulador;
 
-        if (window.create()) {
-            std::cout << "Janela criada. Iniciando simuladores em background..." << std::endl;
-            window.iniciarSimuladores();
-
-            // MessageBoxA(NULL, "Checkpoint 1: A função inciciarSimuladores() foi chamada.", "Depuração", MB_OK);
-
-            std::cout << "Sistema iniciado com sucesso!" << std::endl;
-            return window.run();
-        } else {
-            MessageBox(nullptr, L"Falha ao inicializar o sistema", L"Erro", MB_ICONERROR);
-            return -1;
-        }
-    }
-    catch (const std::exception& e) {
-        std::string error = "Exceção: ";
-        error += e.what();
-        MessageBoxA(nullptr, error.c_str(), "Erro", MB_ICONERROR);
+    if (!simulador.inicializar()) {
+        MessageBox(nullptr, L"Falha ao inicializar o sistema", L"Erro", MB_ICONERROR);
         return -1;
     }
-    catch (...) {
-        MessageBox(nullptr, L"Exceção desconhecida", L"Erro", MB_ICONERROR);
-        return -1;
-    }
-    return -1;
-}
 
-// Ponto de entrada alternativo para console
-int main() {
-    return WinMain(GetModuleHandle(nullptr), nullptr, GetCommandLineA(), SW_SHOW);
+    std::cout << "Sistema iniciado com sucesso!" << std::endl;
+    simulador.executar();
+
+    return 0;
 }
