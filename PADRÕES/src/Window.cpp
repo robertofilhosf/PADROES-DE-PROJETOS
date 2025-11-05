@@ -7,9 +7,10 @@
 #include <windowsx.h>
 #include <chrono>
 #include <string>
+#include <filesystem>
+namespace fs = std::filesystem;
 
-void funcao_worker_hidrometro(Hidrometro* hidrometro, std::mutex* mutex, HWND hwnd) {
-    // MessageBoxA(hwnd, "Checkpoint 3: A thread de trabalho está rodando!", "Depuração", MB_OK);
+void funcao_worker_hidrometro(Hidrometro* hidrometro, std::mutex* mutex, HWND hwnd, int intervaloMs) {
     try {
         // O loop infinito da simulação agora está dentro de um bloco 'try'
         while (true) {
@@ -25,24 +26,20 @@ void funcao_worker_hidrometro(Hidrometro* hidrometro, std::mutex* mutex, HWND hw
 
             PostMessage(hwnd, WM_USER_REDESENHAR, 0, 0);
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(16));
-        }
-    }
-    catch (const std::exception& e) {
-        // Se um erro padrão do C++ ocorrer (ex: bad_alloc), ele será capturado.
-        std::string error_msg = "Uma exceção ocorreu na thread de simulação:\n\n";
-        error_msg += e.what();
-        MessageBoxA(hwnd, error_msg.c_str(), "Erro Crítico na Simulação", MB_ICONERROR | MB_OK);
+            std::this_thread::sleep_for(std::chrono::milliseconds(intervaloMs));
+        } 
     }
     catch (...) {
-        // Se ocorrer qualquer outro tipo de erro (ex: acesso a ponteiro nulo).
-        MessageBoxA(hwnd, "Um erro desconhecido e fatal ocorreu na thread de simulação.", "Erro Crítico na Simulação", MB_ICONERROR | MB_OK);
-    }
+            MessageBoxA(hwnd, "Erro na thread de simulacao", "Erro", MB_ICONERROR);
+        }
 }
 
 Window::Window()
-    : m_hwnd(nullptr), m_hInstance(GetModuleHandle(nullptr)) {
-    // A inicialização do unique_ptr e vetores é feita automaticamente
+    : m_hwnd(nullptr), 
+      m_hInstance(GetModuleHandle(nullptr)),
+      m_gerarImagens(false),
+      m_intervaloTempoMs(16),
+      m_frameCount(0) {// A inicialização do unique_ptr e vetores é feita automaticamente
 }
 
 Window::~Window() {
@@ -113,7 +110,8 @@ void Window::iniciarSimuladores() {
             funcao_worker_hidrometro,
             &m_hidrometros[i],           // Ponteiro para o Hidrômetro
             &m_mutexDados,              // Ponteiro para o mutex compartilhado
-            m_hwnd                     // Handle da janela para enviar mensagens
+            m_hwnd,                     // Handle da janela para enviar mensagens
+            m_intervaloTempoMs                     
         );
     }
 
@@ -211,6 +209,79 @@ LRESULT Window::handleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
 //     }
 // }
 
+void Window::salvarFrameComoBMP() {
+    
+    const std::wstring pastaFrames = L"frames";
+
+    try {
+        fs::create_directories(pastaFrames);
+    } catch (const std::exception& e) {
+        MessageBoxA(NULL, e.what(), "Erro ao criar pasta frames", MB_ICONERROR);
+        return;
+    }
+
+    RECT rect;
+    GetClientRect(m_hwnd, &rect);
+    int width = rect.right - rect.left;
+    int height = rect.bottom - rect.top;
+
+    HDC hdc = GetDC(m_hwnd);
+    HDC memDC = CreateCompatibleDC(hdc);
+    HBITMAP hBitmap = CreateCompatibleBitmap(hdc, width, height);
+    SelectObject(memDC, hBitmap);
+
+    BitBlt(memDC, 0, 0, width, height, hdc, 0, 0, SRCCOPY);
+
+    BITMAPFILEHEADER bmfHeader;
+    BITMAPINFOHEADER bi;
+
+    bi.biSize = sizeof(BITMAPINFOHEADER);
+    bi.biWidth = width;
+    bi.biHeight = -height; // inverte o eixo vertical
+    bi.biPlanes = 1;
+    bi.biBitCount = 24;
+    bi.biCompression = BI_RGB;
+    bi.biSizeImage = 0;
+    bi.biXPelsPerMeter = 0;
+    bi.biYPelsPerMeter = 0;
+    bi.biClrUsed = 0;
+    bi.biClrImportant = 0;
+
+    DWORD dwBmpSize = ((width * bi.biBitCount + 31) / 32) * 4 * height;
+    std::vector<BYTE> bmpBuffer(dwBmpSize);
+    GetDIBits(hdc, hBitmap, 0, height, bmpBuffer.data(), (BITMAPINFO*)&bi, DIB_RGB_COLORS);
+
+    bmfHeader.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+    bmfHeader.bfSize = bmfHeader.bfOffBits + dwBmpSize;
+    bmfHeader.bfType = 0x4D42;
+
+    std::wstringstream nomeArquivo;
+    nomeArquivo << pastaFrames << L"\\frame_" << std::setfill(L'0') << std::setw(4)
+                << ++m_frameCount << L".bmp";
+
+    std::wstring caminhoCompleto = nomeArquivo.str();
+
+    HANDLE hFile = CreateFileW(
+        caminhoCompleto.c_str(),
+        GENERIC_WRITE,
+        0,
+        NULL,
+        CREATE_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL
+    );
+
+    DWORD dwBytesWritten;
+    WriteFile(hFile, &bmfHeader, sizeof(BITMAPFILEHEADER), &dwBytesWritten, NULL);
+    WriteFile(hFile, &bi, sizeof(BITMAPINFOHEADER), &dwBytesWritten, NULL);
+    WriteFile(hFile, bmpBuffer.data(), dwBmpSize, &dwBytesWritten, NULL);
+    CloseHandle(hFile);
+
+    DeleteObject(hBitmap);
+    DeleteDC(memDC);
+    ReleaseDC(m_hwnd, hdc);
+}
+
 void Window::render() {
     PAINTSTRUCT ps;
     HDC hdc = BeginPaint(m_hwnd, &ps);
@@ -246,7 +317,7 @@ void Window::render() {
             SetBkMode(memDC, TRANSPARENT);
 
             RECT titleRect = {0, 20, width, 80};
-            DrawText(memDC, L"SIMULADOR DE HIDRÔMETRO", -1, &titleRect, DT_CENTER | DT_VCENTER);
+            DrawText(memDC, L"SIMULADOR DE HIDROMETRO", -1, &titleRect, DT_CENTER | DT_VCENTER);
 
             SelectObject(memDC, oldFont);
             DeleteObject(titleFont);
@@ -291,8 +362,21 @@ void Window::render() {
     SelectObject(memDC, oldBitmap);
     DeleteObject(memBitmap);
     DeleteDC(memDC);
-
+    if (m_gerarImagens) {
+        salvarFrameComoBMP();
+    }
     EndPaint(m_hwnd, &ps);
+}
+
+void Window::setVazao(double valor) {
+    std::lock_guard<std::mutex> lock(m_mutexDados);
+    if (!m_hidrometros.empty()) {
+        m_hidrometros[0].setVazao(valor);
+    }
+}
+
+void Window::setGerarImagens(bool habilitar) {
+    m_gerarImagens = habilitar;
 }
 
 void Window::setVazaoPrincipal(double vazao) {
@@ -302,4 +386,19 @@ void Window::setVazaoPrincipal(double vazao) {
 
 void Window::forcarRedesenho() {
     InvalidateRect(m_hwnd, NULL, FALSE);
+}
+
+void Window::setIntervaloTempo(int ms) {
+    m_intervaloTempoMs = ms > 0 ? ms : 16;
+}
+
+void Window::modificaVazao(double novaVazao) {
+    std::lock_guard<std::mutex> lock(m_mutexDados);
+    if (!m_hidrometros.empty()) {
+        m_hidrometros[0].setVazao(novaVazao);
+    }
+}
+
+void Window::finalizar() {
+    PostMessage(m_hwnd, WM_CLOSE, 0, 0);
 }
