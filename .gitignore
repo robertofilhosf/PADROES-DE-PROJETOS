@@ -1,1 +1,4 @@
 PADRÕES/app.exe
+PADRÕES/app_cliente_cli.exe
+PADRÕES/frames/*.bmp
+build/*
