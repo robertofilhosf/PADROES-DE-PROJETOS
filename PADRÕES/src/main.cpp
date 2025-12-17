@@ -1,38 +1,21 @@
-#include "Window.h"
-#include <windows.h>
-#include <iostream>
+#include <stdio.h>
+#include "singleton/config.h"
+#include "observer/observer.h"
+#include "facade/sistema_facade.h"
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
-    AllocConsole();
-    FILE* f;
-    freopen_s(&f, "CONOUT$", "w", stdout);
-
-    std::cout << "Iniciando Sistema Hidrométrico..." << std::endl;
-
-    try {
-        Window window;
-
-        if (window.create()) {
-            std::cout << "Sistema iniciado com sucesso!" << std::endl;
-            return window.run();
-        } else {
-            MessageBox(nullptr, L"Falha ao inicializar o sistema", L"Erro", MB_ICONERROR);
-            return -1;
-        }
-    }
-    catch (const std::exception& e) {
-        std::string error = "Exceção: ";
-        error += e.what();
-        MessageBoxA(nullptr, error.c_str(), "Erro", MB_ICONERROR);
-        return -1;
-    }
-    catch (...) {
-        MessageBox(nullptr, L"Exceção desconhecida", L"Erro", MB_ICONERROR);
-        return -1;
-    }
+void consoleObserver(const char* msg) {
+    printf("%s\n", msg);
 }
 
-// Ponto de entrada alternativo para console
 int main() {
-    return WinMain(GetModuleHandle(nullptr), nullptr, GetCommandLineA(), SW_SHOW);
+
+    Config* config = getConfig();
+    printf("Sistema iniciado | Debug: %d\n\n", config->modo_debug);
+
+    adicionarObserver(consoleObserver);
+
+    cadastrarUsuarioFacade(1, "Jose Roberto");
+    calcularFacade(100.0f, 2);
+
+    return 0;
 }
